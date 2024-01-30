@@ -62,6 +62,29 @@ type UserProfile struct {
 	Languages      []UserLanguage      `json:"languages"`
 }
 
+func (u *UserProfile) toAIUserProfile() AIUserProfile {
+	tags := make([]string, len(u.Skills))
+	for i, v := range u.Skills {
+		tags[i] = v.Label
+	}
+
+	return AIUserProfile{
+		Description:    u.Description,
+		Skills:         tags,
+		Languages:      u.Languages,
+		WorkHistory:    u.WorkHistory,
+		Certifications: u.Certifications,
+	}
+}
+
+type AIUserProfile struct {
+	Description    string              `json:"description"`
+	Skills         []string            `json:"skills"`
+	Languages      []UserLanguage      `json:"languages"`
+	WorkHistory    []UserWorkHistory   `json:"WorkHistory"`
+	Certifications []UserCertification `json:"certifications"`
+}
+
 type Tag struct {
 	Id    string `json:"id"`
 	Label string `json:"label"`
@@ -73,7 +96,7 @@ type Job struct {
 	Name               string   `json:"name"`
 	Description        string   `json:"description"`
 	Reason             string   `json:"reason"`
-	CollaborationTypes []string `json:"CollaborationTypes"`
+	CollaborationTypes []string `json:"collaborationTypes"`
 	Bond               string   `json:"bond"`
 	Remote             bool     `json:"remote"`
 	MaxSalary          uint     `json:"maxSalary"`
@@ -83,23 +106,65 @@ type Job struct {
 	Tags               []Tag    `json:"tags"`
 }
 
-func getUserProfileByUserId(userId string) UserProfile {
+func (j *Job) toAIJob() AIJob {
+	tags := make([]string, len(j.Tags))
+
+	for i, v := range j.Tags {
+		tags[i] = v.Label
+	}
+
+	return AIJob{
+		Name:               j.Name,
+		Description:        j.Description,
+		Reason:             j.Reason,
+		CollaborationTypes: j.CollaborationTypes,
+		Bond:               j.Bond,
+		Remote:             j.Remote,
+		Skills:             tags,
+	}
+}
+
+type AIJob struct {
+	Name               string   `json:"name"`
+	Description        string   `json:"description"`
+	Reason             string   `json:"reason"`
+	CollaborationTypes []string `json:"collaborationTypes"`
+	Bond               string   `json:"bond"`
+	Remote             bool     `json:"remote"`
+	Skills             []string `json:"skills"`
+	//MaxSalary          uint     `json:"maxSalary"`
+	//MinSalary          uint     `json:"minSalary"`
+	//Currency           string   `json:"string"`
+	//TagIds             []string `json:"tagIds"`
+	//Tags []Tag `json:"tags"`
+}
+
+func getUserProfileByUserId(userId string) *UserProfile {
 	response, err := http.Get(baseUrl + "/private/user-profile/" + userId)
+
 	if err != nil {
-		panic("Error getting user profile")
+		fmt.Println("Error loading user profile")
+		fmt.Println(err)
+		return nil
 	}
 
 	data, err := io.ReadAll(response.Body)
 	if err != nil {
-		panic("Error reading user profile response")
+		fmt.Println("Error reading using profile")
+		fmt.Println(err)
+		return nil
 	}
 
 	var profile UserProfile
 	err = json.Unmarshal(data, &profile)
+
 	if err != nil {
-		panic("Error deserializing user profile")
+		fmt.Println("Error deserializing user profile")
+		fmt.Println(err)
+		return nil
 	}
-	return profile
+
+	return &profile
 }
 
 func getUserIds() []string {
@@ -108,37 +173,50 @@ func getUserIds() []string {
 	postResponse, err := http.Post(baseUrl+"/private/user-profiles/search", "application/json", requestBody)
 
 	if err != nil {
-		panic("Error loading user ids")
+		fmt.Println("Error loading user ids")
+		fmt.Println(er)
+		return []string{}
 	}
 
 	var userIds []string
 	body, err := io.ReadAll(postResponse.Body)
 	err = json.Unmarshal(body, &userIds)
+
 	if err != nil {
-		panic("Error deserializing user ids")
+		fmt.Println(err)
+		fmt.Println("Error deserializing user ids")
+		return []string{}
 	}
 
 	return userIds
 }
 
-func getJobById(jobId string) Job {
+func getJobById(jobId string) *Job {
 	response, err := http.Get(baseUrl + "/private/job/" + jobId)
+
 	if err != nil {
-		panic("Error getting job")
+		fmt.Println("Error getting job")
+		fmt.Println(err)
+		return nil
 	}
 
 	data, err := io.ReadAll(response.Body)
 	if err != nil {
-		panic("Error reading job response")
+		fmt.Println("Error reading job response")
+		fmt.Println(err)
+		return nil
 	}
 
 	var job Job
 	err = json.Unmarshal(data, &job)
+
 	if err != nil {
-		panic("Error deserializing job")
+		fmt.Println("Error deserializing job")
+		fmt.Println(err)
+		return nil
 	}
 
-	return job
+	return &job
 }
 
 func main() {
