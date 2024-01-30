@@ -5,15 +5,30 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/joho/godotenv"
 	"github.com/redis/go-redis/v9"
 	"github.com/sashabaranov/go-openai"
 	"io"
 	"net/http"
+	"os"
 )
 
-/* CONFIG */
-var baseUrl = "http://localhost:3001"
-var openAiClient = openai.NewClient("")
+var openAiClient *openai.Client
+
+func init() {
+	fmt.Println("Initializing env...")
+	envErr := godotenv.Load()
+	if envErr != nil {
+		fmt.Println("Error loading .env file")
+	}
+	loadOpenAIClient(&openAiClient)
+}
+
+func loadOpenAIClient(client **openai.Client) {
+	*client = openai.NewClient(os.Getenv("OPENAI_KEY"))
+}
+
+var client = &http.Client{}
 
 type Address struct {
 	Label string `json:"label"`
@@ -140,7 +155,7 @@ type AIJob struct {
 }
 
 func getUserProfileByUserId(userId string) *UserProfile {
-	response, err := http.Get(baseUrl + "/private/user-profile/" + userId)
+	response, err := apiRequest("/private/user-profile/"+userId, "GET", nil)
 
 	if err != nil {
 		fmt.Println("Error loading user profile")
@@ -167,20 +182,59 @@ func getUserProfileByUserId(userId string) *UserProfile {
 	return &profile
 }
 
+func apiRequest(url, method string, body *bytes.Buffer) (*http.Response, error) {
+	var req *http.Request
+	var err error
+
+	baseUrl := os.Getenv("BASE_URL")
+
+	if body != nil {
+		req, err = http.NewRequest(method, baseUrl+url, body)
+	} else {
+		req, err = http.NewRequest(method, baseUrl+url, nil)
+	}
+
+	if err != nil {
+		return nil, err
+	}
+
+	authHeader := os.Getenv("AUTH_HEADER")
+
+	req.Header.Add("Content-Type", "application/json")
+	req.Header.Add("Authorization", authHeader)
+	response, err := client.Do(req)
+
+	if err != nil {
+		return nil, err
+	}
+
+	return response, nil
+}
+
+type UserSearch struct {
+	UserIDS []string `json:"userIds"`
+}
+
+type ScoreResponse struct {
+	Score uint `json:"score"`
+}
+
 func getUserIds() []string {
 	/* REQUEST FOR FILTER */
 	requestBody := bytes.NewBuffer([]byte(`{"tags": []}`))
-	postResponse, err := http.Post(baseUrl+"/private/user-profiles/search", "application/json", requestBody)
+	response, err := apiRequest("/private/user-profiles/search", "POST", requestBody)
 
 	if err != nil {
 		fmt.Println("Error loading user ids")
-		fmt.Println(er)
+		fmt.Println(err)
 		return []string{}
 	}
 
-	var userIds []string
-	body, err := io.ReadAll(postResponse.Body)
+	var userIds UserSearch
+	body, err := io.ReadAll(response.Body)
+	fmt.Println(body)
 	err = json.Unmarshal(body, &userIds)
+	fmt.Println(userIds)
 
 	if err != nil {
 		fmt.Println(err)
@@ -188,11 +242,11 @@ func getUserIds() []string {
 		return []string{}
 	}
 
-	return userIds
+	return userIds.UserIDS
 }
 
-func getJobById(jobId string) *Job {
-	response, err := http.Get(baseUrl + "/private/job/" + jobId)
+func getJobByRequestId(requestId string) *Job {
+	response, err := apiRequest("/private/job/by-request/"+requestId, "GET", nil)
 
 	if err != nil {
 		fmt.Println("Error getting job")
@@ -219,9 +273,131 @@ func getJobById(jobId string) *Job {
 	return &job
 }
 
+func generateUser(data GenerateUserRequest) {
+	jsonData, err := json.Marshal(data)
+
+	if err != nil {
+		fmt.Println("Error jsoning")
+		return
+	}
+
+	_, err = apiRequest("/private/ai/generate-user", "POST", bytes.NewBuffer(jsonData))
+
+	if err != nil {
+		fmt.Println(err)
+	}
+}
+
+func getGptMatch(job, user string) *ScoreResponse {
+	resp, err := openAiClient.CreateChatCompletion(
+		context.Background(),
+		openai.ChatCompletionRequest{
+			Model: openai.GPT4TurboPreview,
+			Messages: []openai.ChatCompletionMessage{
+				{
+					Role: openai.ChatMessageRoleSystem,
+					Content: "I need you to check if candidate is relevant for this job post, " +
+						"I will send you the candidate info in stringified json and the job post in stringified json as well" +
+						"And I need you to return json -> {'score' : score} -> where score will be a number between 0 and 100 (included) based on how relevant the candidate is for this job post",
+				},
+				{
+					Role:    openai.ChatMessageRoleUser,
+					Content: "Candidate: " + user + "   ... and job post: " + job,
+				},
+			},
+			ResponseFormat: &openai.ChatCompletionResponseFormat{Type: openai.ChatCompletionResponseFormatTypeJSONObject},
+		},
+	)
+
+	if err != nil {
+		fmt.Println(err)
+		fmt.Println("Error generating gpt response")
+		return nil
+	}
+
+	var score ScoreResponse
+	fmt.Println(user)
+	fmt.Println(job)
+	fmt.Println(resp.Choices[0].Message.Content)
+	err = json.Unmarshal([]byte(resp.Choices[0].Message.Content), &score)
+
+	if err != nil {
+		fmt.Println("Error serializing GPT response")
+		return nil
+	}
+
+	return &score
+}
+
+type GenerateUserRequest struct {
+	RequestID string `json:"requestId"`
+	UserID    string `json:"userId"`
+	Score     uint   `json:"score"`
+}
+
+func process(requestId string) {
+	job := getJobByRequestId(requestId)
+	if job == nil {
+		fmt.Println("No job in process")
+		return
+	}
+
+	userIds := getUserIds()
+
+	if len(userIds) == 0 {
+		fmt.Println("No users found")
+		return
+	}
+
+	for _, v := range userIds {
+		user := getUserProfileByUserId(v)
+
+		if user == nil {
+			fmt.Println("No user in iteration")
+			continue
+		}
+
+		aiJob, err := json.Marshal(job.toAIJob())
+		var aiJobString string
+		if err != nil {
+			fmt.Println("Failed converting job to ai json")
+			continue
+		} else {
+			aiJobString = string(aiJob)
+		}
+
+		aiUser, err := json.Marshal(user.toAIUserProfile())
+		var aiUserString string
+		if err != nil {
+			fmt.Println("Failed converting user to ai json")
+			continue
+		} else {
+			aiUserString = string(aiUser)
+		}
+
+		gptResponse := getGptMatch(aiJobString, aiUserString)
+
+		if gptResponse == nil {
+			// Second try may fix few things
+			gptResponse = getGptMatch(aiJobString, aiUserString)
+		}
+
+		fmt.Println(gptResponse)
+
+		if gptResponse != nil {
+			requestData := GenerateUserRequest{
+				RequestID: requestId,
+				UserID:    v,
+				Score:     gptResponse.Score,
+			}
+			generateUser(requestData)
+		}
+	}
+}
+
 func main() {
 	ctx := context.Background()
-	opt, _ := redis.ParseURL("")
+	opt, _ := redis.ParseURL(os.Getenv("REDIS_URL"))
 	client := redis.NewClient(opt)
 
 	pubsub := client.Subscribe(ctx, "ai-job-match")
@@ -230,38 +406,7 @@ func main() {
 	fmt.Println("Started")
 
 	for msg := range ch {
-		jobId := msg.Payload
-
-		job := getJobById(jobId)
-		fmt.Println(job)
-		userIds := getUserIds()
-
-		for _, v := range userIds {
-			user := getUserProfileByUserId(v)
-			fmt.Println(user)
-			resp, err := openAiClient.CreateChatCompletion(
-				context.Background(),
-				openai.ChatCompletionRequest{
-					Model: openai.GPT4TurboPreview,
-					Messages: []openai.ChatCompletionMessage{
-						{
-							Role:    openai.ChatMessageRoleSystem,
-							Content: "Return either {'correct': true} or {'correct': false} based randomly, no matter the user message in json",
-						},
-						{
-							Role:    openai.ChatMessageRoleUser,
-							Content: "Return random boolean",
-						},
-					},
-					ResponseFormat: &openai.ChatCompletionResponseFormat{Type: openai.ChatCompletionResponseFormatTypeJSONObject},
-				},
-			)
-			if err != nil {
-				fmt.Printf("ChatCompletion error: %v\n", err)
-				return
-			}
-
-			fmt.Println(resp.Choices[0].Message.Content)
-		}
+		requestId := msg.Payload
+		go process(requestId)
 	}
 }
