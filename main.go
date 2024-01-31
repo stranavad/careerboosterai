@@ -232,9 +232,7 @@ func getUserIds() []string {
 
 	var userIds UserSearch
 	body, err := io.ReadAll(response.Body)
-	fmt.Println(body)
 	err = json.Unmarshal(body, &userIds)
-	fmt.Println(userIds)
 
 	if err != nil {
 		fmt.Println(err)
@@ -292,13 +290,17 @@ func getGptMatch(job, user string) *ScoreResponse {
 	resp, err := openAiClient.CreateChatCompletion(
 		context.Background(),
 		openai.ChatCompletionRequest{
-			Model: openai.GPT4TurboPreview,
+			Model: openai.GPT3Dot5Turbo1106,
 			Messages: []openai.ChatCompletionMessage{
 				{
 					Role: openai.ChatMessageRoleSystem,
-					Content: "I need you to check if candidate is relevant for this job post, " +
-						"I will send you the candidate info in stringified json and the job post in stringified json as well" +
-						"And I need you to return json -> {'score' : score} -> where score will be a number between 0 and 100 (included) based on how relevant the candidate is for this job post",
+					Content: "Please assess the suitability of a candidate for a given job posting." +
+						"I will provide you with two pieces of information: a candidate's details in JSON format and the job posting in JSON format, both likely to be in the Czech language." +
+						"Your task is to evaluate their relevance and return a JSON object with a 'score' field, where the score should be a number ranging from 0 to 100 (inclusive)." +
+						"The score should reflect how well the candidate matches the job posting.",
+					//Content: "I need you to check if candidate is relevant for this job post, " +
+					//	"I will send you the candidate info in stringified json and the job post in stringified json as well" +
+					//	"And I need you to return json -> {'score' : score} -> where score will be a number between 0 and 100 (included) based on how relevant the candidate is for this job post. Both job and user will probably be in czech language, so keep that in mind",
 				},
 				{
 					Role:    openai.ChatMessageRoleUser,
